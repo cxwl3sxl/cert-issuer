@@ -59,6 +59,8 @@ impl Issuer {
             serial: "serial_placeholder".to_string(),
             fingerprint,
             status: CertificateStatus::Valid,
+            cert_pem: String::new(),
+            private_key_pem: String::new(),
         };
         
         Ok(cert_model)

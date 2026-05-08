@@ -17,9 +17,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .allow_methods(tower_http::cors::Any)
         .allow_headers(tower_http::cors::Any);
     
+    // Create application state
+    let state = api::certificate::create_state();
+    
     let app = Router::new()
         .merge(api::health::router())
-        .merge(api::certificate::router())
+        .merge(api::certificate::router(state))
         .layer(cors);
     
     let addr = SocketAddr::from(([0, 0, 0, 0], 8080));

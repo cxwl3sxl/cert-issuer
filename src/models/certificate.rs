@@ -10,6 +10,10 @@ pub struct Certificate {
     pub serial: String,
     pub fingerprint: String,
     pub status: CertificateStatus,
+    // PEM编码的证书，用于下载
+    pub cert_pem: String,
+    // 私钥PEM（用于PFX生成）
+    pub private_key_pem: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -39,4 +43,10 @@ pub enum KeyAlgorithm {
     Rsa4096,
     EcdsaP256,
     EcdsaP384,
+}
+
+impl Default for KeyAlgorithm {
+    fn default() -> Self {
+        KeyAlgorithm::Rsa2048
+    }
 }
