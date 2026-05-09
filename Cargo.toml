@@ -41,6 +41,7 @@ num-traits = "0.2"
 # Async
 once_cell = "1"
 rand = "0.8"
+bytes = "1"
 
 # PKCS12/PFX generation - use p12 crate
 p12 = "0.5"

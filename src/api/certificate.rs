@@ -5,6 +5,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use bytes::Bytes;
 use rcgen::{Certificate, CertificateParams, DistinguishedName, DnType, KeyPair, PKCS_RSA_SHA256};
 use serde::Deserialize;
 use std::sync::Arc;
@@ -285,39 +286,30 @@ pub async fn download_certificate(
             let (body, content_type, filename) = match query.format.as_str() {
                 "pem" => {
                     // Return the actual certificate PEM as bytes
-                    (cert.cert_pem.as_bytes().to_vec(), "application/x-pem-file".to_string(), format!("{}.pem", cert.subject))
+                    (Bytes::from(cert.cert_pem.as_bytes().to_vec()), "application/x-pem-file".to_string(), format!("{}.pem", cert.subject))
                 }
                 "der" => {
                     // Convert PEM to DER
                     let der = pem_to_der(&cert.cert_pem);
-                    (der.as_bytes().to_vec(), "application/x-x509-ca-cert".to_string(), format!("{}.der", cert.subject))
+                    (Bytes::from(der.as_bytes().to_vec()), "application/x-x509-ca-cert".to_string(), format!("{}.der", cert.subject))
                 }
                 "nginx" => {
                     let body = format!(
                         "# Nginx SSL configuration for {}\n# \n# 1. Save your certificate as /etc/nginx/ssl/{}.pem\n# 2. Save your private key as /etc/nginx/ssl/{}.key\n# 3. Use the configuration below:\n\nserver {{\n    listen 443 ssl;\n    server_name {};\n\n    ssl_certificate /etc/nginx/ssl/{}.pem;\n    ssl_certificate_key /etc/nginx/ssl/{}.key;\n\n    ssl_protocols TLSv1.2 TLSv1.3;\n    ssl_ciphers HIGH:!aNULL:!MD5;\n}}",
                         cert.subject, cert.subject, cert.subject, cert.subject, cert.subject, cert.subject
                     );
-                    (body.into_bytes(), "text/plain".to_string(), format!("{}-nginx.conf", cert.subject))
-                }
-                "iis" => {
-                    let body = format!(
-                        "# IIS Certificate Import Instructions for {}\n#\n# Step 1: Convert to PFX format (requires OpenSSL)\n#   openssl pkcs12 -export -out {}.pfx -inkey private_key.pem -in certificate.pem\n#\n# Step 2: Import to Windows Server/IIS\n#   - Open IIS Manager\n#   - Select server node\n#   - Open \"Server Certificates\"\n#   - Click \"Import\"\n#   - Select the .pfx file and enter password\n#\n# Certificate Details:\n#   Subject: {}\n#   Serial: {}\n#   Valid From: {}\n#   Valid Until: {}",
-                        cert.subject, cert.subject, cert.subject, cert.serial, 
-                        format_timestamp(cert.not_before), format_timestamp(cert.not_after)
-                    );
-                    (body.into_bytes(), "text/plain".to_string(), format!("{}-iis.txt", cert.subject))
+                    (Bytes::from(body.into_bytes()), "text/plain".to_string(), format!("{}-nginx.conf", cert.subject))
                 }
                 "pfx" | "iis" => {
                     let password = query.password.as_deref().unwrap_or("changeit");
-                    
+
                     // Generate real binary PFX using p12 crate
                     let pfx_result = create_pfx(&cert.cert_pem, &cert.private_key_pem, password, &cert.subject);
-                    
+
                     match pfx_result {
                         Ok(pfx_der) => {
-                            // Return binary PFX file - convert to base64 for HTTP transfer
-                            let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &pfx_der);
-                            (encoded.into_bytes(), "application/x-pkcs12".to_string(), format!("{}.pfx", cert.subject))
+                            // Return binary PFX file directly (don't base64 encode)
+                            (Bytes::from(pfx_der), "application/x-pkcs12".to_string(), format!("{}.pfx", cert.subject))
                         }
                         Err(e) => {
                             tracing::error!("Failed to generate PFX: {}", e);
@@ -330,12 +322,12 @@ pub async fn download_certificate(
                                 cert.cert_pem,
                                 cert.private_key_pem
                             );
-                            (combined.into_bytes(), "application/x-pem-file".to_string(), format!("{}-iis.pem", cert.subject))
+                            (Bytes::from(combined.into_bytes()), "application/x-pem-file".to_string(), format!("{}-iis.pem", cert.subject))
                         }
                     }
                 }
                 _ => {
-                    (cert.cert_pem.as_bytes().to_vec(), "application/x-pem-file".to_string(), format!("{}.pem", cert.subject))
+                    (Bytes::from(cert.cert_pem.as_bytes().to_vec()), "application/x-pem-file".to_string(), format!("{}.pem", cert.subject))
                 }
             };
 
@@ -361,17 +353,17 @@ fn pem_to_der(pem: &str) -> String {
     format!("[DER bytes - {} bytes]", content.len())
 }
 
-// Create real PKCS#12 (PFX) format
-fn create_pfx(cert_pem: &str, key_pem: &str, password: &str, _name: &str) -> Result<Vec<u8>, String> {
+// Create real PKCS#12 (PFX) format compatible with IIS
+fn create_pfx(cert_pem: &str, key_pem: &str, password: &str, subject_name: &str) -> Result<Vec<u8>, String> {
     // Parse certificate from PEM
     let cert_pem_obj = pem::parse(cert_pem.as_bytes())
         .map_err(|e| format!("Failed to parse certificate: {}", e))?;
     let cert_der = cert_pem_obj.contents().to_vec();
-    
+
     // Parse private key from PEM
     let key_pem_obj = pem::parse(key_pem.as_bytes())
         .map_err(|e| format!("Failed to parse private key: {}", e))?;
-    
+
     // Check key format and convert if needed
     let key_der = match key_pem_obj.tag() {
         "RSA PRIVATE KEY" => {
@@ -386,69 +378,88 @@ fn create_pfx(cert_pem: &str, key_pem: &str, password: &str, _name: &str) -> Res
             return Err(format!("Unknown key format: {}", key_pem_obj.tag()));
         }
     };
-    
+
     // Create PFX using the p12 crate
-    let pfx = p12::PFX::new(&cert_der, &key_der, None, password, "certificate")
-        .ok_or_else(|| "Failed to create PFX structure".to_string())?;
-    
+    // For IIS compatibility, include friendly name and ensure proper structure
+    let pfx = p12::PFX::new(
+        &cert_der,
+        &key_der,
+        None, // No certificate chain for now
+        password,
+        subject_name, // Use subject as friendly name for IIS
+    ).ok_or_else(|| "Failed to create PFX structure".to_string())?;
+
     // Use to_der() method to get DER bytes
     let der_bytes = pfx.to_der();
-    
-    Ok(der_bytes)
+
+    // Attempt to decode as base64
+    match base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &der_bytes) {
+        Ok(binary_pfx) => {
+            tracing::info!("Successfully decoded PFX from base64, got {} bytes", binary_pfx.len());
+            Ok(binary_pfx)
+        }
+        Err(e) => {
+            tracing::error!("Failed to decode PFX from base64: {}, returning original", e);
+            // If decode fails, return the original string as bytes (might be needed for fallback)
+            Ok(Vec::from(der_bytes))
+        }
+    }
 }
 
 // Convert PKCS#1 (RSA PRIVATE KEY) to PKCS#8 (PRIVATE KEY) format
+// This ensures IIS compatibility by providing properly formatted private keys
 fn convert_pkcs1_to_pkcs8(pkcs1_key: &[u8]) -> Result<Vec<u8>, String> {
-    use der::Encode;
-    
     // RSA algorithm OID: 1.2.840.113549.1.1.1
-    // Parameters: NULL
-    let rsa_oid = [0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01];
-    let null_oid = [0x05, 0x00];
-    
-    // Build AlgorithmIdentifier SEQUENCE
-    let algorithm_der = [
+    let rsa_algorithm_oid = [
         0x30, 0x0D,  // SEQUENCE length 13
-        0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01,  // OID
-        0x05, 0x00,  // NULL
-    ].to_vec();
-    
-    // Build PrivateKeyInfo
-    // Version = 0 (INTEGER)
-    // Algorithm = AlgorithmIdentifier
-    // PrivateKey = OCTET STRING containing PKCS#1 key
-    
+        0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01,  // RSA OID
+        0x05, 0x00,  // NULL parameters
+    ];
+
+    // Build PKCS#8 PrivateKeyInfo structure:
+    // SEQUENCE {
+    //   version INTEGER (0),
+    //   algorithm AlgorithmIdentifier,
+    //   privateKey OCTET STRING (containing PKCS#1 key)
+    // }
+
     let mut pkcs8 = Vec::new();
-    
-    // SEQUENCE
-    pkcs8.push(0x30);
-    
-    // Calculate total length
-    // version (3) + algorithm (15) + privateKey (2 + key len)
-    let total_len = 3 + algorithm_der.len() + 2 + pkcs1_key.len();
-    let tag = if total_len > 127 { 0x82 } else { 0x04 };
-    if total_len > 127 {
-        pkcs8.push((total_len >> 8) as u8);
-    }
-    pkcs8.push(total_len as u8);
-    
-    // Version INTEGER
-    pkcs8.extend_from_slice(&[0x02, 0x01, 0x00]); // version = 0
-    
-    // AlgorithmIdentifier
-    pkcs8.extend_from_slice(&algorithm_der);
-    
-    // PrivateKey OCTET STRING
-    pkcs8.push(0x04); // OCTET STRING
-    if pkcs1_key.len() > 127 {
-        pkcs8.push(0x82);
-        pkcs8.push((pkcs1_key.len() >> 8) as u8);
-        pkcs8.push(pkcs1_key.len() as u8);
+
+    // Calculate lengths for proper DER encoding
+    let private_key_len = pkcs1_key.len();
+    let (private_key_octet_string_header, private_key_header_len) = if private_key_len >= 128 {
+        // Long form length encoding
+        let len_bytes = (private_key_len as u16).to_be_bytes();
+        (vec![0x82, len_bytes[0], len_bytes[1]], 3)
     } else {
-        pkcs8.push(pkcs1_key.len() as u8);
+        // Short form length encoding
+        (vec![private_key_len as u8], 1)
+    };
+
+    let total_content_len = 3 + rsa_algorithm_oid.len() + 1 + private_key_header_len + private_key_len;
+
+    // SEQUENCE tag
+    pkcs8.push(0x30);
+
+    // Length of entire SEQUENCE
+    if total_content_len >= 128 {
+        let len_bytes = (total_content_len as u16).to_be_bytes();
+        pkcs8.extend_from_slice(&[0x82, len_bytes[0], len_bytes[1]]);
+    } else {
+        pkcs8.push(total_content_len as u8);
     }
+
+    // Version (INTEGER 0)
+    pkcs8.extend_from_slice(&[0x02, 0x01, 0x00]);
+
+    // AlgorithmIdentifier
+    pkcs8.extend_from_slice(&rsa_algorithm_oid);
+
+    // PrivateKey (OCTET STRING containing PKCS#1 key)
+    pkcs8.push(0x04); // OCTET STRING tag
+    pkcs8.extend_from_slice(&private_key_octet_string_header);
     pkcs8.extend_from_slice(pkcs1_key);
-    
+
     Ok(pkcs8)
 }
 

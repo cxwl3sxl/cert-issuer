@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo doc *)",
+      "Bash(cargo check *)",
+      "Bash(cargo run *)",
+      "Bash(curl -X POST http://localhost:8080/api/certificates/issue -H \"Content-Type: application/json\" -d '{\"cn\": \"test.example.com\", \"validity_days\": 365}')",
+      "Bash(curl -s \"http://localhost:8080/api/certificates/f2c32fb2-9b5f-49d4-a0c6-a7c6487483c5/cert?format=pfx&password=test123\")",
+      "Bash(xxd)",
+      "Bash(curl -s -w \"%{content_type}\" \"http://localhost:8080/api/certificates/f2c32fb2-9b5f-49d4-a0c6-a7c6487483c5/cert?format=pfx&password=test123\")",
+      "Bash(openssl pkcs12 *)",
+      "Bash(curl -s -i \"http://localhost:8080/api/certificates/f2c32fb2-9b5f-49d4-a0c6-a7c6487483c5/cert?format=pfx&password=test123\")",
+      "Bash(kill %1)",
+      "Bash(rustc test_base64_decode.rs -L target/release/deps --extern base64=target/release/deps/libbase64-*.rlib)",
+      "Bash(rustc check_pfx_output.rs)",
+      "Bash(./check_pfx_output)",
+      "Bash(cargo build *)",
+      "Bash(curl -v \"http://localhost:8080/api/certificates/f2c32fb2-9b5f-49d4-a0c6-a7c6487483c5/cert?format=pfx&password=test123\")",
+      "Bash(curl *)"
+    ]
+  }
+}
