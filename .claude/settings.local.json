@@ -16,7 +16,15 @@
       "Bash(./check_pfx_output)",
       "Bash(cargo build *)",
       "Bash(curl -v \"http://localhost:8080/api/certificates/f2c32fb2-9b5f-49d4-a0c6-a7c6487483c5/cert?format=pfx&password=test123\")",
-      "Bash(curl *)"
+      "Bash(curl *)",
+      "Bash(git checkout *)",
+      "Bash(./target/release/cert-issuer *)",
+      "Bash(taskkill /f /im cert-issuer.exe)",
+      "Bash(netstat -ano)",
+      "Bash(findstr :8080)",
+      "Bash(taskkill /f /pid 29208)",
+      "Bash(chmod +x test_binary.sh)",
+      "Bash(./test_binary.sh)"
     ]
   }
 }
