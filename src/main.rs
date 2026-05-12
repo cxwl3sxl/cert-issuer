@@ -88,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .allow_headers(tower_http::cors::Any);
 
     // Create application state (with optional external CA)
-    let state = api::certificate::create_state(args.ca_cert, args.ca_key);
+    let state = api::certificate::create_state(args.ca_cert, args.ca_key, data_dir);
 
     let mut app = Router::new()
         .merge(api::health::router())

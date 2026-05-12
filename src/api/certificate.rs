@@ -121,11 +121,118 @@ pub struct AppStateInner {
     pub ca_key_pair: KeyPair,
     pub ca_cert: Certificate,
     pub issuer_name: String,
+    pub data_dir: String,
 }
 
 pub type AppState = Arc<RwLock<AppStateInner>>;
 
-pub fn create_state(ca_cert_path: Option<String>, ca_key_path: Option<String>) -> AppState {
+fn load_certificates_from_disk(data_dir: &str) -> HashMap<String, StoredCertificate> {
+    let certs_dir = format!("{}/certificates", data_dir);
+    let mut certificates = HashMap::new();
+
+    let entries = match std::fs::read_dir(&certs_dir) {
+        Ok(e) => e,
+        Err(_) => return certificates,
+    };
+
+    for entry in entries.flatten() {
+        let dir_path = entry.path();
+        if !dir_path.is_dir() {
+            continue;
+        }
+
+        let meta_path = dir_path.join("meta.json");
+        let cert_pem_path = dir_path.join("cert.pem");
+        let key_pem_path = dir_path.join("key.pem");
+
+        if !meta_path.exists() || !cert_pem_path.exists() || !key_pem_path.exists() {
+            continue;
+        }
+
+        let meta_json: serde_json::Value = match std::fs::read_to_string(&meta_path) {
+            Ok(s) => match serde_json::from_str(&s) {
+                Ok(v) => v,
+                Err(_) => continue,
+            },
+            Err(_) => continue,
+        };
+
+        let cert_pem = match std::fs::read_to_string(&cert_pem_path) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let private_key_pem = match std::fs::read_to_string(&key_pem_path) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+
+        let id = meta_json["id"].as_str().unwrap_or("").to_string();
+        if id.is_empty() {
+            continue;
+        }
+
+        let status = match meta_json["status"].as_str().unwrap_or("valid") {
+            "revoked" => CertificateStatus::Revoked,
+            "expired" => CertificateStatus::Expired,
+            _ => CertificateStatus::Valid,
+        };
+
+        let not_after = meta_json["not_after"].as_i64().unwrap_or(0);
+        let now = chrono::Utc::now().timestamp();
+        let status = if status == CertificateStatus::Valid && now > not_after {
+            CertificateStatus::Expired
+        } else {
+            status
+        };
+
+        certificates.insert(id.clone(), StoredCertificate {
+            id,
+            subject: meta_json["subject"].as_str().unwrap_or("").to_string(),
+            issuer: meta_json["issuer"].as_str().unwrap_or("").to_string(),
+            not_before: meta_json["not_before"].as_i64().unwrap_or(0),
+            not_after,
+            serial: meta_json["serial"].as_str().unwrap_or("").to_string(),
+            fingerprint: meta_json["fingerprint"].as_str().unwrap_or("").to_string(),
+            status,
+            cert_pem,
+            private_key_pem,
+        });
+
+        tracing::info!("Loaded certificate from disk: {}", dir_path.display());
+    }
+
+    certificates
+}
+
+fn save_certificate_to_disk(data_dir: &str, cert: &StoredCertificate) {
+    let cert_dir = format!("{}/certificates/{}", data_dir, cert.id);
+    std::fs::create_dir_all(&cert_dir).ok();
+
+    let meta = serde_json::json!({
+        "id": cert.id,
+        "subject": cert.subject,
+        "issuer": cert.issuer,
+        "not_before": cert.not_before,
+        "not_after": cert.not_after,
+        "serial": cert.serial,
+        "fingerprint": cert.fingerprint,
+        "status": match cert.status {
+            CertificateStatus::Valid => "valid",
+            CertificateStatus::Revoked => "revoked",
+            CertificateStatus::Expired => "expired",
+        },
+    });
+
+    std::fs::write(format!("{}/meta.json", cert_dir), meta.to_string()).ok();
+    std::fs::write(format!("{}/cert.pem", cert_dir), &cert.cert_pem).ok();
+    std::fs::write(format!("{}/key.pem", cert_dir), &cert.private_key_pem).ok();
+}
+
+pub fn create_state(
+    ca_cert_path: Option<String>,
+    ca_key_path: Option<String>,
+    data_dir: &str,
+) -> AppState {
     let (ca_key_pair, ca_cert, issuer_name) = if let (Some(cert_path), Some(key_path)) = (ca_cert_path, ca_key_path) {
         // Load external CA certificate and key
         let ca_cert_pem = std::fs::read_to_string(&cert_path)
@@ -196,11 +303,18 @@ pub fn create_state(ca_cert_path: Option<String>, ca_key_path: Option<String>) -
         (ca_key_pair, ca_cert, "Certificate Issuer CA".to_string())
     };
 
+    let certificates = load_certificates_from_disk(data_dir);
+    let loaded_count = certificates.len();
+    if loaded_count > 0 {
+        tracing::info!("Loaded {} certificates from disk", loaded_count);
+    }
+
     Arc::new(RwLock::new(AppStateInner {
-        certificates: HashMap::new(),
+        certificates,
         ca_key_pair,
         ca_cert,
         issuer_name,
+        data_dir: data_dir.to_string(),
     }))
 }
 
@@ -319,10 +433,19 @@ pub async fn issue_certificate(
     };
 
     let api_cert = ApiCertificate::from(stored_cert.clone());
-    
+    let id = stored_cert.id.clone();
+
+    // Get data_dir for persistence before locking for write
+    {
+        let state_read = state.read().await;
+        let data_dir = state_read.data_dir.clone();
+        drop(state_read);
+        save_certificate_to_disk(&data_dir, &stored_cert);
+    }
+
     let mut state_write = state.write().await;
-    state_write.certificates.insert(stored_cert.id.clone(), stored_cert);
-    
+    state_write.certificates.insert(id, stored_cert);
+
     Ok(Json(api_cert))
 }
 
