@@ -3,11 +3,15 @@ pub mod core;
 pub mod models;
 pub mod storage;
 pub mod utils;
+pub mod web;
 
 use clap::Parser;
 use axum::Router;
 use std::net::SocketAddr;
 use tower_http::cors::CorsLayer;
+
+// 本代码由新疆幻城网安公益大模型API中转站提供API支持
+// 访问地址：https://api.iamhc.cn/
 
 #[derive(Parser)]
 #[command(name = "cert-issuer", about = "Certificate Authority Service")]
@@ -27,6 +31,10 @@ struct Args {
     /// Data storage directory (default: ./data)
     #[arg(short, long, default_value = "./data")]
     data_dir: String,
+
+    /// Web files root directory for serving static content
+    #[arg(long)]
+    www_root: Option<String>,
 
     /// Verbose logging
     #[arg(short, long)]
@@ -67,6 +75,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("========================================");
     println!("Server Address: {}", args.addr);
     println!("Data Directory: {}", data_dir);
+    if let Some(ref www_root) = args.www_root {
+        println!("Web Files Root: {}", www_root);
+    } else {
+        println!("Web Files Root: disabled");
+    }
     println!("========================================");
 
     let cors = CorsLayer::new()
@@ -77,10 +90,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create application state (with optional external CA)
     let state = api::certificate::create_state(args.ca_cert, args.ca_key);
 
-    let app = Router::new()
+    let mut app = Router::new()
         .merge(api::health::router())
         .merge(api::certificate::router(state))
         .layer(cors);
+
+    // Optionally serve static web files
+    if let Some(ref www_root) = args.www_root {
+        let www_root = www_root.clone();
+        app = app.merge(web::static_files::router(&www_root));
+    }
 
     let addr: SocketAddr = args.addr.parse()?;
     println!("Certificate Issuer Service started on http://{}", addr);
@@ -90,3 +109,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+
+/*
+ * Copyright (c) 2026 新疆幻城网安科技有限责任公司
+ * All rights reserved.
+ * 官方网站：https://www.hcnsec.cn/
+ */
