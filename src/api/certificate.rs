@@ -120,37 +120,87 @@ pub struct AppStateInner {
     pub certificates: HashMap<String, StoredCertificate>,
     pub ca_key_pair: KeyPair,
     pub ca_cert: Certificate,
+    pub issuer_name: String,
 }
 
 pub type AppState = Arc<RwLock<AppStateInner>>;
 
-pub fn create_state() -> AppState {
-    // Generate CA key pair - try RSA first, fallback to ECDSA
-    let ca_key_pair = match KeyPair::generate_for(&PKCS_RSA_SHA256) {
-        Ok(kp) => kp,
-        Err(_) => {
-            // Fallback: generate a simple key for testing
-            // In production, use proper key generation with proper RNG seeding
-            tracing::warn!("RSA key generation failed, using ECDSA");
-            KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap_or_else(|_| {
-                // Last resort - create a dummy key (this will fail gracefully later)
-                panic!("Failed to generate any key pair")
-            })
-        }
+pub fn create_state(ca_cert_path: Option<String>, ca_key_path: Option<String>) -> AppState {
+    let (ca_key_pair, ca_cert, issuer_name) = if let (Some(cert_path), Some(key_path)) = (ca_cert_path, ca_key_path) {
+        // Load external CA certificate and key
+        let ca_cert_pem = std::fs::read_to_string(&cert_path)
+            .unwrap_or_else(|e| panic!("Failed to read CA certificate file '{}': {}", cert_path, e));
+        let ca_key_pem_str = std::fs::read_to_string(&key_path)
+            .unwrap_or_else(|e| panic!("Failed to read CA key file '{}': {}", key_path, e));
+
+        // Parse the key PEM to check format and convert PKCS#1 -> PKCS#8 if needed
+        let key_pem_obj = pem::parse(&ca_key_pem_str)
+            .unwrap_or_else(|e| panic!("Failed to parse CA key PEM '{}': {}", key_path, e));
+
+        let ca_key_pair = match key_pem_obj.tag() {
+            "RSA PRIVATE KEY" => {
+                // PKCS#1 format - convert to PKCS#8, then re-wrap as PEM
+                let pkcs8_der = convert_pkcs1_to_pkcs8(key_pem_obj.contents())
+                    .expect("Failed to convert PKCS#1 key to PKCS#8");
+                let pkcs8_pem = pem::Pem::new("PRIVATE KEY", pkcs8_der);
+                let pkcs8_pem_str = pem::encode(&pkcs8_pem);
+                KeyPair::from_pem(&pkcs8_pem_str)
+                    .unwrap_or_else(|e| panic!("Failed to parse CA private key from '{}': {}", key_path, e))
+            }
+            "PRIVATE KEY" | "EC PRIVATE KEY" => {
+                KeyPair::from_pem(&ca_key_pem_str)
+                    .unwrap_or_else(|e| panic!("Failed to parse CA private key from '{}': {}", key_path, e))
+            }
+            _ => {
+                panic!("Unsupported key format '{}' in '{}'", key_pem_obj.tag(), key_path);
+            }
+        };
+
+        let ca_params = CertificateParams::from_ca_cert_pem(&ca_cert_pem)
+            .unwrap_or_else(|e| panic!("Failed to parse CA certificate from '{}': {}", cert_path, e));
+
+        // Extract issuer name from the loaded CA certificate's subject CN
+        let issuer_name = ca_params
+            .distinguished_name
+            .get(&DnType::CommonName)
+            .map(|v| dn_value_to_string(v))
+            .unwrap_or_else(|| "External CA".to_string());
+
+        tracing::info!("Loaded external CA: {}", issuer_name);
+
+        let ca_cert = ca_params
+            .self_signed(&ca_key_pair)
+            .unwrap_or_else(|e| panic!("Failed to reconstruct CA certificate: {}", e));
+
+        (ca_key_pair, ca_cert, issuer_name)
+    } else {
+        // Generate new CA key pair - try RSA first, fallback to ECDSA
+        let ca_key_pair = match KeyPair::generate_for(&PKCS_RSA_SHA256) {
+            Ok(kp) => kp,
+            Err(_) => {
+                tracing::warn!("RSA key generation failed, using ECDSA");
+                KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap_or_else(|_| {
+                    panic!("Failed to generate any key pair")
+                })
+            }
+        };
+
+        let mut ca_params = CertificateParams::default();
+        ca_params.distinguished_name = DistinguishedName::new();
+        ca_params.distinguished_name.push(DnType::CommonName, "Certificate Issuer CA");
+        ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+
+        let ca_cert = ca_params.self_signed(&ca_key_pair)
+            .expect("Failed to generate CA certificate");
+
+        (ca_key_pair, ca_cert, "Certificate Issuer CA".to_string())
     };
-    
-    let mut ca_params = CertificateParams::default();
-    ca_params.distinguished_name = DistinguishedName::new();
-    ca_params.distinguished_name.push(DnType::CommonName, "Certificate Issuer CA");
-    ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
-    
-    let ca_cert = ca_params.self_signed(&ca_key_pair)
-        .expect("Failed to generate CA certificate");
-    
+
     Arc::new(RwLock::new(AppStateInner {
         certificates: HashMap::new(),
         ca_key_pair,
         ca_cert,
+        issuer_name,
     }))
 }
 
@@ -235,6 +285,7 @@ pub async fn issue_certificate(
 
     // Sign with CA
     let state_read = state.read().await;
+    let issuer_name = state_read.issuer_name.clone();
     let user_cert = match cert_params.signed_by(&user_key_pair, &state_read.ca_cert, &state_read.ca_key_pair) {
         Ok(c) => c,
         Err(e) => {
@@ -247,17 +298,17 @@ pub async fn issue_certificate(
     // Get PEM encoded certificate
     let cert_pem = user_cert.pem();
     let private_key_pem = user_key_pair.serialize_pem();
-    
+
     // Calculate fingerprint from DER
     let cert_der = user_cert.der();
     let fingerprint = format!("{:x}", md5::compute(cert_der));
-    
+
     let serial = format!("{:032x}", u128::from_le_bytes(cert_der[..16].try_into().unwrap_or([0; 16])));
 
     let stored_cert = StoredCertificate {
         id: uuid::Uuid::new_v4().to_string(),
         subject: req.cn.clone(),
-        issuer: "Certificate Issuer CA".to_string(),
+        issuer: issuer_name,
         not_before,
         not_after,
         serial,
@@ -463,12 +514,16 @@ fn convert_pkcs1_to_pkcs8(pkcs1_key: &[u8]) -> Result<Vec<u8>, String> {
     Ok(pkcs8)
 }
 
-fn generate_fingerprint() -> String {
-    let bytes: [u8; 32] = rand::random();
-    bytes.iter()
-        .map(|b| format!("{:02X}", b))
-        .collect::<Vec<_>>()
-        .join(":")
+fn dn_value_to_string(v: &rcgen::DnValue) -> String {
+    match v {
+        rcgen::DnValue::Utf8String(s) => s.clone(),
+        rcgen::DnValue::PrintableString(s) => s.as_str().to_string(),
+        rcgen::DnValue::Ia5String(s) => s.as_str().to_string(),
+        rcgen::DnValue::BmpString(s) => format!("{:?}", s),
+        rcgen::DnValue::TeletexString(s) => format!("{:?}", s),
+        rcgen::DnValue::UniversalString(s) => format!("{:?}", s),
+        _ => format!("{:?}", v),
+    }
 }
 
 pub fn router(state: AppState) -> Router {
@@ -479,3 +534,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/certificates/:id/cert", get(download_certificate))
         .with_state(state)
 }
+
+/*
+ * Copyright (c) 2026 新疆幻城网安科技有限责任公司
+ * All rights reserved.
+ * 官方网站：https://www.hcnsec.cn/
+ */

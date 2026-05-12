@@ -24,7 +24,16 @@
       "Bash(findstr :8080)",
       "Bash(taskkill /f /pid 29208)",
       "Bash(chmod +x test_binary.sh)",
-      "Bash(./test_binary.sh)"
+      "Bash(./test_binary.sh)",
+      "Bash(openssl x509 *)",
+      "Bash(pkill cert-issuer *)",
+      "Bash(tasklist)",
+      "Bash(findstr cert-issuer *)",
+      "Bash(taskkill *)",
+      "Bash(timeout 5s ./target/release/cert-issuer.exe --ca-cert ca_cert.pem --ca-key ca_key.key)",
+      "Bash(./target/release/cert-issuer.exe --ca-cert ca_cert.pem --ca-key ca_key.key)",
+      "Bash(./target/release/cert-issuer.exe)",
+      "Bash(taskkill /F /IM cert-issuer.exe)"
     ]
   }
 }
