@@ -138,6 +138,7 @@ onMounted(fetchCertificate)
               class="btn btn-primary"
               @click="downloadCertificate"
               :disabled="downloading"
+              style="height: 35px;"
             >
               <span v-if="downloading" class="spinner" style="width: 16px; height: 16px;"></span>
               <span v-else>↓</span>
