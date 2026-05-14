@@ -47,6 +47,7 @@ bytes = "1"
 p12 = "0.5"
 pem = "3"
 der = "0.7"
+zip = "8.6.0"
 
 [dev-dependencies]
 tower = { version = "0.4", features = ["util"] }

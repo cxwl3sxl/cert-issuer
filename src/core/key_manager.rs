@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-use rcgen::KeyPair;
-
 use crate::utils::error::Error;
 use crate::utils::crypto::CryptoService;
 

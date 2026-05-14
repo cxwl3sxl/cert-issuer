@@ -2,7 +2,6 @@ use rcgen::{
     BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType,
     ExtendedKeyUsagePurpose, IsCa, KeyPair,
 };
-use x509_parser::prelude::FromDer;
 
 use crate::models::certificate::{CertificateRequest, KeyAlgorithm};
 use crate::utils::error::Error;

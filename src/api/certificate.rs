@@ -24,7 +24,7 @@ fn default_format() -> String {
     "pem".to_string()
 }
 
-use crate::models::certificate::{CertificateStatus, KeyAlgorithm};
+use crate::models::certificate::{CertificateStatus};
 
 #[derive(Debug, serde::Serialize, Deserialize)]
 pub struct IssueCertRequest {
@@ -459,8 +459,17 @@ pub async fn download_certificate(
         Some(cert) => {
             let (body, content_type, filename) = match query.format.as_str() {
                 "pem" => {
-                    // Return the actual certificate PEM as bytes
-                    (Bytes::from(cert.cert_pem.as_bytes().to_vec()), "application/x-pem-file".to_string(), format!("{}.pem", cert.subject))
+                    // Return as ZIP containing cert.pem and key.pem for nginx
+                    let zip_data = create_nginx_zip(&cert.cert_pem, &cert.private_key_pem, &cert.subject);
+                    match zip_data {
+                        Ok(zip_bytes) => {
+                            (Bytes::from(zip_bytes), "application/zip".to_string(), format!("{}-nginx.zip", cert.subject))
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to create nginx zip: {}", e);
+                            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+                        }
+                    }
                 }
                 "der" => {
                     // Convert PEM to DER
@@ -468,6 +477,7 @@ pub async fn download_certificate(
                     (Bytes::from(der.as_bytes().to_vec()), "application/x-x509-ca-cert".to_string(), format!("{}.der", cert.subject))
                 }
                 "nginx" => {
+                    // Return as ZIP containing cert.pem and key.pem for nginx
                     let body = format!(
                         "# Nginx SSL configuration for {}\n# \n# 1. Save your certificate as /etc/nginx/ssl/{}.pem\n# 2. Save your private key as /etc/nginx/ssl/{}.key\n# 3. Use the configuration below:\n\nserver {{\n    listen 443 ssl;\n    server_name {};\n\n    ssl_certificate /etc/nginx/ssl/{}.pem;\n    ssl_certificate_key /etc/nginx/ssl/{}.key;\n\n    ssl_protocols TLSv1.2 TLSv1.3;\n    ssl_ciphers HIGH:!aNULL:!MD5;\n}}",
                         cert.subject, cert.subject, cert.subject, cert.subject, cert.subject, cert.subject
@@ -578,6 +588,38 @@ fn create_pfx(cert_pem: &str, key_pem: &str, password: &str, subject_name: &str)
             Ok(Vec::from(der_bytes))
         }
     }
+}
+
+// Create ZIP file containing cert.pem and key.pem for nginx
+fn create_nginx_zip(cert_pem: &str, key_pem: &str, _subject: &str) -> Result<Vec<u8>, String> {
+    use zip::write::SimpleFileOptions;
+    use std::io::Write;
+
+    let mut zip_buffer = Vec::new();
+    {
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut zip_buffer));
+
+        let options = SimpleFileOptions::default()
+            .unix_permissions(0o644);
+
+        // Add cert.pem
+        zip.start_file("cert.pem", options)
+            .map_err(|e| format!("Failed to start cert.pem in zip: {}", e))?;
+        zip.write_all(cert_pem.as_bytes())
+            .map_err(|e| format!("Failed to write cert.pem: {}", e))?;
+
+        // Add key.pem
+        zip.start_file("key.pem", options)
+            .map_err(|e| format!("Failed to start key.pem in zip: {}", e))?;
+        zip.write_all(key_pem.as_bytes())
+            .map_err(|e| format!("Failed to write key.pem: {}", e))?;
+
+        // Finish and get bytes
+        zip.finish()
+            .map_err(|e| format!("Failed to finish zip: {}", e))?;
+    }
+
+    Ok(zip_buffer)
 }
 
 // Convert PKCS#1 (RSA PRIVATE KEY) to PKCS#8 (PRIVATE KEY) format
