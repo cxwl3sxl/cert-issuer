@@ -55,7 +55,7 @@ const downloadCertificate = async () => {
     
     // 获取文件名
     let filename = `${certificate.value?.subject.cn || 'certificate'}`
-    if (format === 'pem') filename += '.pem'
+    if (format === 'pem') filename += '.zip'
     else if (format === 'der') filename += '.der'
     else if (format === 'pfx') filename += '.pfx'
     else if (format === 'nginx') filename += '-nginx.conf'
