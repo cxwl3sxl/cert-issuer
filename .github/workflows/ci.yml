@@ -38,12 +38,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
-      - name: Install Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'cert-issuer-web/node_modules'
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -53,13 +54,19 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: cert-issuer-web/node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('cert-issuer-web/package-lock.json') }}
+
       - name: Build Web Frontend
         working-directory: cert-issuer-web
         run: npm ci && npm run build
 
       - name: Build Rust Application
         run: |
-          cargo build --release --locked --target ${{ matrix.target }}
+          cargo build --release --target ${{ matrix.target }}
           mv target/${{ matrix.target }}/release/cert-issuer.exe target/${{ matrix.target }}/release/cert-issuer 2>/dev/null || true
 
       - name: Prepare Distribution Directory
