@@ -39,6 +39,8 @@ pub struct IssueCertRequest {
     pub st: Option<String>,
     #[serde(default)]
     pub c: Option<String>,
+    #[serde(default)]
+    pub san: Option<Vec<String>>,
     #[serde(default = "default_validity_days")]
     pub validity_days: u32,
 }
@@ -381,7 +383,25 @@ pub async fn issue_certificate(
     if let Some(ref c) = req.c {
         cert_params.distinguished_name.push(DnType::CountryName, c.clone());
     }
-    
+
+    // Set Subject Alternative Names
+    if let Some(ref san_list) = req.san {
+        if !san_list.is_empty() {
+            use rcgen::SanType;
+            cert_params.subject_alt_names = san_list
+                .iter()
+                .filter_map(|s| {
+                    // Support DNS names and IP addresses
+                    if s.parse::<std::net::IpAddr>().is_ok() {
+                        Some(SanType::IpAddress(s.parse().unwrap()))
+                    } else {
+                        SanType::dns_name(s).ok()
+                    }
+                })
+                .collect();
+        }
+    }
+
     // Set validity
     let now = chrono::Utc::now();
     let not_before = now.timestamp();

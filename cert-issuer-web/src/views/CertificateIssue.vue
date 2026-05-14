@@ -12,8 +12,11 @@ const form = ref<IssueRequest>({
   l: '',
   st: '',
   c: '',
+  san: [],
   validity_days: 365
 })
+
+const sanInput = ref('')
 
 const loading = ref(false)
 const error = ref<string | null>(null)
@@ -39,8 +42,19 @@ const handleSubmit = async () => {
   error.value = null
   success.value = null
 
+  // Parse SAN input (comma or newline separated)
+  const sanList = sanInput.value
+    .split(/[,\n]/)
+    .map(s => s.trim())
+    .filter(s => s.length > 0)
+
+  const requestData: IssueRequest = {
+    ...form.value,
+    san: sanList.length > 0 ? sanList : undefined
+  }
+
   try {
-    const result = await certificateApi.issueCertificate(form.value)
+    const result = await certificateApi.issueCertificate(requestData)
     success.value = `证书颁发成功！ID: ${result.id}`
     setTimeout(() => {
       router.push(`/certificates/${result.id}`)
@@ -60,8 +74,10 @@ const resetForm = () => {
     l: '',
     st: '',
     c: '',
+    san: [],
     validity_days: 365
   }
+  sanInput.value = ''
   error.value = null
   success.value = null
 }
@@ -91,6 +107,17 @@ const resetForm = () => {
               required
             />
             <p class="form-hint">证书的主体名称，必须填写</p>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Subject Alternative Names (SAN)</label>
+            <textarea
+              v-model="sanInput"
+              class="input textarea"
+              placeholder="例如: www.example.com, 192.168.1.1 (每行或逗号分隔多个)"
+              rows="3"
+            ></textarea>
+            <p class="form-hint">可选的备用域名或IP地址，用于多域名证书</p>
           </div>
 
           <div class="form-row">
@@ -308,6 +335,11 @@ const resetForm = () => {
   font-size: 0.75rem;
   color: var(--text-muted);
   margin-top: 0.375rem;
+}
+
+.textarea {
+  resize: vertical;
+  min-height: 80px;
 }
 
 /* 有效期选项 */

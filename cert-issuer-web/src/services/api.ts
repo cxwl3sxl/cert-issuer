@@ -30,6 +30,7 @@ export interface IssueRequest {
   l?: string
   st?: string
   c?: string
+  san?: string[]
   validity_days: number
 }
 

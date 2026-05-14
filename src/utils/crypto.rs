@@ -56,7 +56,24 @@ impl CryptoService {
         if let Some(ref country) = request.country {
             cert_params.distinguished_name.push(DnType::CountryName, country.clone());
         }
-        
+
+        // Set Subject Alternative Names
+        if let Some(ref san_list) = request.san {
+            if !san_list.is_empty() {
+                use rcgen::SanType;
+                cert_params.subject_alt_names = san_list
+                    .iter()
+                    .filter_map(|s| {
+                        if s.parse::<std::net::IpAddr>().is_ok() {
+                            Some(SanType::IpAddress(s.parse().unwrap()))
+                        } else {
+                            SanType::dns_name(s).ok()
+                        }
+                    })
+                    .collect();
+            }
+        }
+
         // Extended key usage
         cert_params.extended_key_usages = vec![
             ExtendedKeyUsagePurpose::ServerAuth,
