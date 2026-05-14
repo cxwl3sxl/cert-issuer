@@ -1,0 +1,145 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., 1.0.0)'
+        required: false
+        type: string
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: cert-issuer-x86_64-pc-windows-msvc
+          - platform: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: cert-issuer-x86_64-unknown-linux-gnu
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            artifact: cert-issuer-aarch64-apple-darwin
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'cert-issuer-web/node_modules'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build Web Frontend
+        working-directory: cert-issuer-web
+        run: npm ci && npm run build
+
+      - name: Build Rust Application
+        run: |
+          cargo build --release --locked --target ${{ matrix.target }}
+          mv target/${{ matrix.target }}/release/cert-issuer.exe target/${{ matrix.target }}/release/cert-issuer 2>/dev/null || true
+
+      - name: Prepare Distribution Directory
+        shell: pwsh
+        run: |
+          $version = if ('${{ github.event.inputs.version }}' -ne '') { '${{ github.event.inputs.version }}' } else { '${{ github.ref_name }}' -replace '^v', '' }
+          $distDir = "release/dist-${{ matrix.artifact }}"
+          New-Item -ItemType Directory -Path $distDir -Force | Out-Null
+
+          # Copy executable
+          Copy-Item "target/${{ matrix.target }}/release/cert-issuer*" "$distDir/"
+
+          # Create www-root and copy web assets
+          New-Item -ItemType Directory -Path "$distDir/www-root" -Force | Out-Null
+          Copy-Item "cert-issuer-web/dist/*" "$distDir/www-root/"
+
+          # Create data directory structure
+          New-Item -ItemType Directory -Path "$distDir/data/certificates" -Force | Out-Null
+
+          # Create README
+          @"
+          cert-issuer $version - ${{ matrix.artifact }}
+          ==========================================
+
+          Usage:
+            Windows: cert-issuer.exe --www-root www-root --data-dir data
+            Linux/Mac: ./cert-issuer --www-root www-root --data-dir data
+
+          Note: Run from the executable's directory, or specify absolute paths.
+          "@ | Out-File -FilePath "$distDir/README.txt" -Encoding UTF8
+
+          echo "Distribution directory prepared: $distDir"
+          Get-ChildItem "$distDir" -Recurse | Select-Object FullName
+
+      - name: Create ZIP Archive
+        shell: pwsh
+        run: |
+          $version = if ('${{ github.event.inputs.version }}' ne '') { '${{ github.event.inputs.version }}' } else { '${{ github.ref_name }}' -replace '^v', '' }
+          $zipName = "cert-issuer-$version-${{ matrix.artifact }}.zip"
+          Compress-Archive -Path "release/dist-${{ matrix.artifact }}/*" -DestinationPath "release/$zipName" -Force
+          Write-Host "Created: release/$zipName"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: release/dist-${{ matrix.artifact }}
+          retention-days: 30
+
+      - name: Upload ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: cert-issuer-${{ matrix.artifact }}-zip
+          path: release/cert-issuer-*.zip
+          retention-days: 30
+
+  release:
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Generate Checksums
+        run: |
+          cd artifacts
+          for dir in */; do
+            echo "=== $dir ===" >> checksums.txt
+            find "$dir" -type f -exec shasum -a 256 {} \; >> checksums.txt 2>/dev/null || powershell -Command "Get-ChildItem -Recurse -File '$dir' | ForEach-Object { (Get-FileHash -Path `$_.FullName -Algorithm SHA256).ToString() + '  ' + `$_.FullName }" >> checksums.txt
+            echo "" >> checksums.txt
+          done
+          cat checksums.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: |
+            artifacts/**/*.zip
+            artifacts/*/checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
