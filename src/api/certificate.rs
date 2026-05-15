@@ -8,7 +8,7 @@ use axum::{
 use bytes::Bytes;
 use rcgen::{Certificate, CertificateParams, DistinguishedName, DnType, Ia5String, KeyPair, PKCS_RSA_SHA256};
 use serde::Deserialize;
-use sha1::Digest;
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use std::collections::HashMap;
@@ -435,7 +435,7 @@ pub async fn issue_certificate(
 
     // Calculate fingerprint from DER
     let cert_der = user_cert.der();
-    let mut hasher = sha1::Sha1::new();
+    let mut hasher = Sha256::new();
     hasher.update(cert_der);
     let fingerprint = hex::encode(hasher.finalize());
 

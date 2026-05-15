@@ -88,8 +88,8 @@ impl CryptoService {
     }
 
     pub fn get_fingerprint(cert_der: &[u8]) -> String {
-        use sha1::{Sha1, Digest};
-        let mut hasher = Sha1::new();
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
         hasher.update(cert_der);
         hex::encode(hasher.finalize())
     }

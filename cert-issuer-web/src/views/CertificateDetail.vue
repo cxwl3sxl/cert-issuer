@@ -274,7 +274,7 @@ onMounted(fetchCertificate)
           <h3 class="card-title">证书指纹</h3>
           <div class="info-list">
 <div class="info-item full">
-               <span class="info-label">SHA-1</span>
+               <span class="info-label">SHA-256</span>
                <span class="info-value mono fingerprint">{{ certificate.fingerprint }}</span>
              </div>
           </div>

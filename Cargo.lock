@@ -352,7 +352,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
- "sha1 0.10.6",
+ "sha2",
  "thiserror",
  "time",
  "tokio",
