@@ -2,7 +2,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::Response,
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use bytes::Bytes;
@@ -710,10 +710,33 @@ fn dn_value_to_string(v: &rcgen::DnValue) -> String {
     }
 }
 
+pub async fn delete_certificate(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, StatusCode> {
+    let mut state_write = state.write().await;
+    
+    // 检查证书是否存在
+    if !state_write.certificates.contains_key(&id) {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    
+    // 从内存中移除
+    state_write.certificates.remove(&id);
+    
+    // 从磁盘删除证书目录
+    let cert_dir = format!("{}/certificates/{}", state_write.data_dir, id);
+    let _ = std::fs::remove_dir_all(&cert_dir);
+    
+    tracing::info!("Certificate deleted: {}", id);
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/certificates", get(list_certificates))
         .route("/api/certificates/issue", post(issue_certificate))
+        .route("/api/certificates/:id", delete(delete_certificate))
         .route("/api/certificates/:id", get(get_certificate))
         .route("/api/certificates/:id/cert", get(download_certificate))
         .with_state(state)

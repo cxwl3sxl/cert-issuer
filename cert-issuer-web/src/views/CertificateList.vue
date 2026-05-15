@@ -10,6 +10,12 @@ const searchQuery = ref('')
 const sortBy = ref<'not_before' | 'not_after' | 'cn'>('not_before')
 const sortOrder = ref<'asc' | 'desc'>('desc')
 
+// 删除确认相关
+const deleteDialogVisible = ref(false)
+const deletingCertId = ref<string | null>(null)
+const deletingCertName = ref<string>('')
+const deletingLoading = ref(false)
+
 const filteredCertificates = computed(() => {
   let result = [...certificates.value]
 
@@ -66,6 +72,34 @@ const toggleSort = (column: 'not_before' | 'not_after' | 'cn') => {
   } else {
     sortBy.value = column
     sortOrder.value = 'desc'
+  }
+}
+
+const showDeleteDialog = (cert: Certificate) => {
+  deletingCertId.value = cert.id
+  deletingCertName.value = cert.subject.cn
+  deleteDialogVisible.value = true
+}
+
+const hideDeleteDialog = () => {
+  deleteDialogVisible.value = false
+  deletingCertId.value = null
+  deletingCertName.value = ''
+}
+
+const confirmDelete = async () => {
+  if (!deletingCertId.value) return
+  
+  deletingLoading.value = true
+  try {
+    await certificateApi.deleteCertificate(deletingCertId.value)
+    // 从列表中移除
+    certificates.value = certificates.value.filter(c => c.id !== deletingCertId.value)
+    hideDeleteDialog()
+  } catch (e: any) {
+    error.value = e.message || '删除证书失败'
+  } finally {
+    deletingLoading.value = false
   }
 }
 
@@ -190,22 +224,53 @@ onMounted(fetchCertificates)
                   {{ getStatusTag(cert).text }}
                 </span>
               </td>
-              <td>
-                <RouterLink :to="`/certificates/${cert.id}`" class="btn btn-ghost">
-                  查看详情
-                </RouterLink>
-              </td>
+               <td>
+                 <div class="action-buttons">
+                   <RouterLink :to="`/certificates/${cert.id}`" class="btn btn-ghost btn-sm">
+                     查看详情
+                   </RouterLink>
+                   <button
+                     class="btn btn-danger btn-sm"
+                     @click="showDeleteDialog(cert)"
+                   >
+                     删除
+                   </button>
+                 </div>
+               </td>
             </tr>
           </tbody>
         </table>
       </div>
 
-      <div v-if="filteredCertificates.length > 0" class="table-footer">
-        <span class="result-count">
-          显示 {{ filteredCertificates.length }} / {{ certificates.length }} 条记录
-        </span>
+       <div v-if="filteredCertificates.length > 0" class="table-footer">
+         <span class="result-count">
+           显示 {{ filteredCertificates.length }} / {{ certificates.length }} 条记录
+         </span>
+       </div>
+     </template>
+   </div>
+
+  <!-- 删除确认对话框 -->
+  <div v-if="deleteDialogVisible" class="dialog-overlay" @click.self="hideDeleteDialog">
+    <div class="dialog">
+      <div class="dialog-header">
+        <h3 class="dialog-title">确认删除证书</h3>
+        <button class="dialog-close" @click="hideDeleteDialog">×</button>
       </div>
-    </template>
+      <div class="dialog-body">
+        <p>您确定要删除证书 <strong>{{ deletingCertName }}</strong> 吗？</p>
+        <p class="dialog-warning">此操作不可撤销，证书将被永久删除。</p>
+      </div>
+      <div class="dialog-footer">
+        <button class="btn btn-secondary" @click="hideDeleteDialog" :disabled="deletingLoading">
+          取消
+        </button>
+        <button class="btn btn-danger" @click="confirmDelete" :disabled="deletingLoading">
+          <span v-if="deletingLoading" class="spinner" style="width: 16px; height: 16px;"></span>
+          <span v-else>删除</span>
+        </button>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -362,6 +427,131 @@ onMounted(fetchCertificates)
 .result-count {
   font-size: 0.8rem;
   color: var(--text-muted);
+}
+
+/* 模态对话框 */
+.dialog-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fadeIn 0.2s ease;
+}
+
+.dialog {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  width: 90%;
+  max-width: 440px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+  animation: slideUp 0.3s ease;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.dialog-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.dialog-close {
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  line-height: 1;
+  padding: 0;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  transition: all 0.2s;
+}
+
+.dialog-close:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.dialog-body {
+  padding: 1.5rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.dialog-body p {
+  margin: 0 0 0.75rem 0;
+}
+
+.dialog-body p:last-child {
+  margin-bottom: 0;
+}
+
+.dialog-warning {
+  font-size: 0.85rem;
+  color: var(--accent-danger);
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  padding: 1rem 1.5rem;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-secondary);
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
+
+/* 操作按钮组 */
+.action-buttons {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.btn-sm {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.8rem;
+}
+
+.btn-danger {
+  color: var(--accent-danger);
+  background: rgba(255, 77, 77, 0.1);
+  border: 1px solid rgba(255, 77, 77, 0.3);
+}
+
+.btn-danger:hover {
+  background: rgba(255, 77, 77, 0.2);
+  border-color: var(--accent-danger);
 }
 
 /* 空状态 */

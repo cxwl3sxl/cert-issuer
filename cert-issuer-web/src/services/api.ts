@@ -60,6 +60,10 @@ export const certificateApi = {
     return response.data
   },
 
+  deleteCertificate: async (id: string): Promise<void> => {
+    await api.delete(`/certificates/${id}`)
+  },
+
   downloadCertificate: async (id: string, format: string = 'pem', password?: string): Promise<Blob> => {
     let url = `/certificates/${id}/cert?format=${format}`
     if (password && format === 'pfx') {
