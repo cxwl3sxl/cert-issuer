@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { certificateApi, type IssueRequest } from '../services/api'
 import { useRouter } from 'vue-router'
 
@@ -31,8 +31,15 @@ const validityOptions = [
   { value: 1095, label: '3 年' }
 ]
 
+// 当CN变化且SAN为空时，自动将CN填入SAN
+watch(() => form.value.cn, (newCn) => {
+  if (newCn && !sanInput.value.trim()) {
+    sanInput.value = newCn
+  }
+})
+
 const isValid = computed(() => {
-  return form.value.cn.trim().length > 0
+  return form.value.cn.trim().length > 0 && sanInput.value.trim().length > 0
 })
 
 const handleSubmit = async () => {
@@ -43,14 +50,19 @@ const handleSubmit = async () => {
   success.value = null
 
   // Parse SAN input (comma or newline separated)
-  const sanList = sanInput.value
+  let sanList = sanInput.value
     .split(/[,\n]/)
     .map(s => s.trim())
     .filter(s => s.length > 0)
 
+  // 确保SAN至少有一个值（使用CN作为默认值）
+  if (sanList.length === 0 && form.value.cn) {
+    sanList = [form.value.cn]
+  }
+
   const requestData: IssueRequest = {
     ...form.value,
-    san: sanList.length > 0 ? sanList : undefined
+    san: sanList
   }
 
   try {
@@ -110,14 +122,15 @@ const resetForm = () => {
           </div>
 
           <div class="form-group">
-            <label class="form-label">Subject Alternative Names (SAN)</label>
+            <label class="form-label required">Subject Alternative Names (SAN)</label>
             <textarea
               v-model="sanInput"
               class="input textarea"
-              placeholder="例如: www.example.com, 192.168.1.1 (每行或逗号分隔多个)"
+              placeholder="例如: www.example.com, 192.168.1.1 (每行或逗号分隔多个), 建议至少填写和CN一致的域名一个"
               rows="3"
+              required
             ></textarea>
-            <p class="form-hint">可选的备用域名或IP地址，用于多域名证书</p>
+            <p class="form-hint">证书的备用域名或IP地址，至少填写一个（会自动包含CN）</p>
           </div>
 
           <div class="form-row">

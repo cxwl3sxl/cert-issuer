@@ -6,7 +6,7 @@ use axum::{
     Json, Router,
 };
 use bytes::Bytes;
-use rcgen::{Certificate, CertificateParams, DistinguishedName, DnType, KeyPair, PKCS_RSA_SHA256};
+use rcgen::{Certificate, CertificateParams, DistinguishedName, DnType, Ia5String, KeyPair, PKCS_RSA_SHA256};
 use serde::Deserialize;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -391,11 +391,10 @@ pub async fn issue_certificate(
             cert_params.subject_alt_names = san_list
                 .iter()
                 .filter_map(|s| {
-                    // Support DNS names and IP addresses
                     if s.parse::<std::net::IpAddr>().is_ok() {
                         Some(SanType::IpAddress(s.parse().unwrap()))
                     } else {
-                        SanType::dns_name(s).ok()
+                        Ia5String::try_from(s.as_str()).ok().map(SanType::DnsName)
                     }
                 })
                 .collect();

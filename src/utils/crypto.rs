@@ -1,6 +1,6 @@
 use rcgen::{
     BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType,
-    ExtendedKeyUsagePurpose, IsCa, KeyPair,
+    ExtendedKeyUsagePurpose, Ia5String, IsCa, KeyPair,
 };
 
 use crate::models::certificate::{CertificateRequest, KeyAlgorithm};
@@ -58,20 +58,18 @@ impl CryptoService {
         }
 
         // Set Subject Alternative Names
-        if let Some(ref san_list) = request.san {
-            if !san_list.is_empty() {
-                use rcgen::SanType;
-                cert_params.subject_alt_names = san_list
-                    .iter()
-                    .filter_map(|s| {
-                        if s.parse::<std::net::IpAddr>().is_ok() {
-                            Some(SanType::IpAddress(s.parse().unwrap()))
-                        } else {
-                            SanType::dns_name(s).ok()
-                        }
-                    })
-                    .collect();
-            }
+        if !request.san.is_empty() {
+            use rcgen::SanType;
+            cert_params.subject_alt_names = request.san
+                .iter()
+                .filter_map(|s| {
+                    if s.parse::<std::net::IpAddr>().is_ok() {
+                        Some(SanType::IpAddress(s.parse().unwrap()))
+                    } else {
+                        Ia5String::try_from(s.as_str()).ok().map(SanType::DnsName)
+                    }
+                })
+                .collect();
         }
 
         // Extended key usage
